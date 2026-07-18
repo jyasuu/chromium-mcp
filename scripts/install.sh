@@ -4,6 +4,8 @@ set -euo pipefail
 REPO="jyasuu/chromium-mcp"
 BINARY="chromium-mcp"
 INSTALL_DIR="${OKF_INSTALL_DIR:-$HOME/.local/bin}"
+# Set CHROMIUM_MCP_LIBC=gnu to force the glibc build instead of musl.
+LIBC="${CHROMIUM_MCP_LIBC:-musl}"
 
 detect_platform() {
   local os arch
@@ -13,7 +15,13 @@ detect_platform() {
   case "$os" in
     Linux)
       case "$arch" in
-        x86_64)  echo "x86_64-unknown-linux-gnu" ;;
+        x86_64)
+          if [ "$LIBC" = "gnu" ]; then
+            echo "x86_64-unknown-linux-gnu"
+          else
+            echo "x86_64-unknown-linux-musl"
+          fi
+          ;;
         aarch64) echo "aarch64-unknown-linux-gnu" ;;
         *)       echo "unsupported"; return 1 ;;
       esac
