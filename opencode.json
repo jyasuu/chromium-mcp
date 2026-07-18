@@ -1,0 +1,11 @@
+{
+    "$schema": "https://opencode.ai/config.json",
+    "mcp": {
+      "chromium": {
+        "type": "local",
+        "command": ["./target/debug/chromium-mcp"],
+        "enabled": true,
+        "env": { "CHROME_PATH": "/usr/bin/chromium" }
+      }
+    }
+  }
