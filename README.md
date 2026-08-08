@@ -132,4 +132,4 @@ Point your MCP client's streamable-HTTP transport at `http://127.0.0.1:8787/mcp`
 
 ## A note on this build
 
-This was written against the current published APIs of `rmcp` (1.7.x) and `chromiumoxide` (0.9.x), verified against their docs.rs pages. The default browser config includes `.no_sandbox()` — remove that call in `src/browser.rs` if you're running in a sandboxed or non-root environment.
+This was written against the current published APIs of `rmcp` (3.x) and `chromiumoxide` (0.9.x), verified against their docs.rs pages. The default browser config includes `.no_sandbox()` — remove that call in `src/browser.rs` if you're running in a sandboxed or non-root environment.

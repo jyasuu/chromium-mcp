@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::{schemars, tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
 
 use crate::browser::BrowserManager;
@@ -59,7 +59,6 @@ pub struct ScreenshotParams {
 #[derive(Clone)]
 pub struct ChromiumServer {
     browser: Arc<BrowserManager>,
-    tool_router: rmcp::handler::server::router::tool::ToolRouter<Self>,
 }
 
 #[tool_router]
@@ -72,10 +71,7 @@ impl ChromiumServer {
     /// Used by the HTTP transport so every session shares the same browser
     /// tab instead of each session launching its own Chrome process.
     pub fn with_shared_browser(browser: Arc<BrowserManager>) -> Self {
-        Self {
-            browser,
-            tool_router: Self::tool_router(),
-        }
+        Self { browser }
     }
 
     #[tool(
@@ -186,8 +182,8 @@ impl ChromiumServer {
 
         let data = STANDARD.encode(&bytes);
         Ok(CallToolResult::success(vec![
-            Content::text(format!("Screenshot saved to {}", path.display())),
-            Content::image(data, "image/png".to_string()),
+            ContentBlock::text(format!("Screenshot saved to {}", path.display())),
+            ContentBlock::image(data, "image/png".to_string()),
         ]))
     }
 
