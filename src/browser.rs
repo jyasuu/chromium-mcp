@@ -21,6 +21,7 @@ struct Session {
     // Keep the CDP event-loop handler task alive for as long as the browser is.
     _handler_task: JoinHandle<()>,
     page: Page,
+    profile_dir: std::path::PathBuf,
 }
 
 pub struct BrowserManager {
@@ -61,6 +62,21 @@ impl BrowserManager {
             if let Some(ref path) = self.chrome_path {
                 builder = builder.chrome_executable(path);
             }
+            // Use a per-process profile dir instead of chromiumoxide's fixed
+            // default (`%TEMP%/chromiumoxide-runner`). If a previous run was
+            // killed ungracefully and left an orphaned Chrome process behind,
+            // a shared/fixed profile dir means every future launch collides
+            // with that stale lock and dies immediately. A unique dir per
+            // process sidesteps that entirely.
+            let profile_dir = std::env::temp_dir().join(format!(
+                "chromium-mcp-profile-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            ));
+            builder = builder.user_data_dir(&profile_dir);
             for flag in &self.chrome_flags {
                 builder = builder.arg(flag.as_str());
             }
@@ -88,6 +104,7 @@ impl BrowserManager {
                 browser,
                 _handler_task,
                 page,
+                profile_dir,
             });
         }
 
@@ -212,6 +229,9 @@ impl BrowserManager {
         let mut guard = self.session.lock().await;
         if let Some(mut session) = guard.take() {
             let _ = session.browser.close().await;
+            let _ = session.browser.wait().await;
+            // Best-effort cleanup; a locked/in-use file here isn't fatal.
+            let _ = std::fs::remove_dir_all(&session.profile_dir);
         }
         Ok(())
     }
