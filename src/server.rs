@@ -11,7 +11,11 @@ use rmcp::{schemars, tool, tool_handler, tool_router, ErrorData as McpError, Ser
 use crate::browser::BrowserManager;
 
 fn internal_error(e: anyhow::Error) -> McpError {
-    McpError::internal_error(e.to_string(), None)
+    // `{:#}` walks the full `anyhow` context chain (e.g. our
+    // "failed to launch chrome/chromium" wrapper *and* the underlying
+    // chromiumoxide/CDP error with Chrome's own stderr output), instead of
+    // just the outermost `.context(...)` message.
+    McpError::internal_error(format!("{e:#}"), None)
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -72,6 +76,13 @@ impl ChromiumServer {
     /// tab instead of each session launching its own Chrome process.
     pub fn with_shared_browser(browser: Arc<BrowserManager>) -> Self {
         Self { browser }
+    }
+
+    /// A cloned handle to the underlying `BrowserManager`, so callers (e.g.
+    /// `main.rs`'s shutdown path) can close the browser without going
+    /// through the MCP tool-call machinery.
+    pub fn browser_handle(&self) -> Arc<BrowserManager> {
+        self.browser.clone()
     }
 
     #[tool(
@@ -140,7 +151,15 @@ impl ChromiumServer {
         }): Parameters<TypeTextParams>,
     ) -> Result<String, McpError> {
         self.browser
-            .type_text(&selector, &text, if press_key_after.is_empty() { None } else { Some(&press_key_after) })
+            .type_text(
+                &selector,
+                &text,
+                if press_key_after.is_empty() {
+                    None
+                } else {
+                    Some(&press_key_after)
+                },
+            )
             .await
             .map_err(internal_error)?;
         Ok(format!("Typed into `{selector}`"))
@@ -153,7 +172,11 @@ impl ChromiumServer {
         &self,
         Parameters(EvalJsParams { script }): Parameters<EvalJsParams>,
     ) -> Result<String, McpError> {
-        let value = self.browser.eval_js(&script).await.map_err(internal_error)?;
+        let value = self
+            .browser
+            .eval_js(&script)
+            .await
+            .map_err(internal_error)?;
         serde_json::to_string(&value).map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
@@ -195,7 +218,9 @@ impl ChromiumServer {
         Ok(STANDARD.encode(&bytes))
     }
 
-    #[tool(description = "Close the shared browser instance, if one is running. A new one will be launched automatically on the next navigate/etc. call.")]
+    #[tool(
+        description = "Close the shared browser instance, if one is running. A new one will be launched automatically on the next navigate/etc. call."
+    )]
     async fn close_browser(&self) -> Result<String, McpError> {
         self.browser.close().await.map_err(internal_error)?;
         Ok("Browser closed".to_string())

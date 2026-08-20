@@ -52,8 +52,7 @@ async fn main() -> anyhow::Result<()> {
     // JSON-RPC traffic.
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -68,18 +67,34 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_stdio(headless: bool, chrome_path: Option<String>) -> anyhow::Result<()> {
     tracing::info!("starting chromium-mcp on stdio (headless={headless})");
-    let service = ChromiumServer::new(headless, chrome_path)
+    let server = ChromiumServer::new(headless, chrome_path);
+    let browser = server.browser_handle();
+    let service = server
         .serve(stdio())
         .await
         .inspect_err(|e| tracing::error!("serving error: {e:?}"))?;
-    service.waiting().await?;
+    // Whichever comes first — the client disconnecting (stdin EOF/pipe
+    // close) or Ctrl+C — make sure Chrome (and its profile dir) gets
+    // cleaned up instead of left as an orphaned process.
+    tokio::select! {
+        result = service.waiting() => { result?; }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("received ctrl-c, shutting down");
+        }
+    }
+    let _ = browser.close().await;
     Ok(())
 }
 
-async fn run_http(headless: bool, addr: SocketAddr, chrome_path: Option<String>) -> anyhow::Result<()> {
+async fn run_http(
+    headless: bool,
+    addr: SocketAddr,
+    chrome_path: Option<String>,
+) -> anyhow::Result<()> {
     // One browser shared by every HTTP session, so `navigate` in one call
     // and `click`/`screenshot` in the next operate on the same tab.
     let browser = Arc::new(BrowserManager::new(headless, chrome_path));
+    let browser_for_shutdown = browser.clone();
 
     let service = StreamableHttpService::new(
         move || Ok(ChromiumServer::with_shared_browser(browser.clone())),
@@ -96,5 +111,6 @@ async fn run_http(headless: bool, addr: SocketAddr, chrome_path: Option<String>)
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;
+    let _ = browser_for_shutdown.close().await;
     Ok(())
 }
