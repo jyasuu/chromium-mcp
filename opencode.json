@@ -5,7 +5,7 @@
         "type": "local",
         "command": ["./target/debug/chromium-mcp"],
         "enabled": true,
-        "env": { "CHROME_PATH": "/usr/bin/chromium" }
+        "environment": { "CHROME_PATH": "/usr/bin/chromium", "CHROME_FLAGS": "--enable-features=WebMCPTesting" }
       }
     }
   }

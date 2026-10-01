@@ -60,6 +60,15 @@ pub struct ScreenshotParams {
     pub full_page: Option<bool>,
 }
 
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct WebMcpCallParams {
+    /// Name of the WebMCP tool to run, exactly as returned by `webmcp_list_tools`.
+    pub name: String,
+    /// Arguments for the tool, matching its `inputSchema`. Omit for tools that take none.
+    #[serde(default)]
+    pub arguments: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
 #[derive(Clone)]
 pub struct ChromiumServer {
     browser: Arc<BrowserManager>,
@@ -181,6 +190,32 @@ impl ChromiumServer {
     }
 
     #[tool(
+        description = "List WebMCP tools that the current page has registered via navigator.modelContext (name, description, JSON input schema). Call this after `navigate`. If `available` is false, the browser has no WebMCP support (enable it with CHROME_FLAGS) and you should fall back to click/type_text/eval_js. Prefer these tools over DOM automation when they exist."
+    )]
+    async fn webmcp_list_tools(&self) -> Result<String, McpError> {
+        let value = self.browser.webmcp_list().await.map_err(internal_error)?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
+        description = "Run a WebMCP tool registered by the current page. `name` must come from `webmcp_list_tools`; `arguments` must match that tool's inputSchema. Runs with the page's own session and authority, so treat it like a user action. Returns JSON: { ok, result | error }."
+    )]
+    async fn webmcp_call_tool(
+        &self,
+        Parameters(WebMcpCallParams { name, arguments }): Parameters<WebMcpCallParams>,
+    ) -> Result<String, McpError> {
+        let args = serde_json::Value::Object(arguments.unwrap_or_default());
+        let value = self
+            .browser
+            .webmcp_call(&name, &args)
+            .await
+            .map_err(internal_error)?;
+        serde_json::to_string_pretty(&value)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))
+    }
+
+    #[tool(
         description = "Take a PNG screenshot of the current page and save it to /tmp/screenshot.png (also returns the image). If called multiple times, files are named screenshot_1.png, screenshot_2.png, etc."
     )]
     async fn screenshot(
@@ -230,6 +265,6 @@ impl ChromiumServer {
 #[tool_handler(
     name = "chromium-mcp",
     version = "0.1.0",
-    instructions = "Tools for driving a headless Chrome/Chromium browser via the Chrome DevTools Protocol (chromiumoxide). A single browser tab is shared across calls: call `navigate` first, then use `click`/`type_text`/`get_text`/`get_content`/`eval_js`/`screenshot`/`pdf` against the current page."
+    instructions = "Tools for driving a headless Chrome/Chromium browser via the Chrome DevTools Protocol (chromiumoxide). A single browser tab is shared across calls: call `navigate` first, then use `click`/`type_text`/`get_text`/`get_content`/`eval_js`/`screenshot`/`pdf` against the current page. If the page exposes WebMCP tools, `webmcp_list_tools` shows them and `webmcp_call_tool` runs them; prefer these over clicking when available."
 )]
 impl ServerHandler for ChromiumServer {}

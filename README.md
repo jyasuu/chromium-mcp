@@ -96,7 +96,19 @@ CHROME_PATH=/usr/bin/chromium ./target/release/chromium-mcp
 | `eval_js` | Evaluate a JS expression/function in the page and return the JSON result |
 | `screenshot` | PNG screenshot (viewport or full page) — saved to `/tmp/screenshot_<timestamp>.png` and returned as MCP image content |
 | `pdf` | Render the page to PDF, returned base64-encoded (headless only) |
+| `webmcp_list_tools` | List WebMCP tools the current page registered via `navigator.modelContext` (`{ available, source, tools }`) |
+| `webmcp_call_tool` | Run a page-registered WebMCP tool by `name` with `arguments` (object); returns `{ ok, result \| error }` |
 | `close_browser` | Shut down the shared Chrome instance |
+
+## WebMCP
+
+If a page registers tools through [WebMCP](https://developer.chrome.com/docs/ai/webmcp/imperative-api) (`navigator.modelContext.registerTool`), an agent can use them instead of clicking through the DOM:
+
+1. Start Chrome with WebMCP enabled. It is behind a flag in Chromium builds (`chrome://flags/#enable-webmcp-testing`); pass the equivalent switch with `CHROME_FLAGS`, e.g. `CHROME_FLAGS="--enable-features=<feature name shown for that flag>"`. Check the exact name on `chrome://version` after enabling the flag in a normal window.
+2. `navigate` to the page, then call `webmcp_list_tools`. If `available` is `false`, the browser has no WebMCP support; fall back to `click` / `type_text` / `eval_js`.
+3. Call `webmcp_call_tool` with a tool `name` from that list and `arguments` matching its `inputSchema`.
+
+Tools are discovered per page, so call `webmcp_list_tools` again after a navigation. WebMCP tools run with the page's logged-in session, so treat each call like a user action.
 
 ## Client configuration
 

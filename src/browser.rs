@@ -78,7 +78,24 @@ impl BrowserManager {
             ));
             builder = builder.user_data_dir(&profile_dir);
             for flag in &self.chrome_flags {
-                builder = builder.arg(flag.as_str());
+                // chromiumoxide's `arg()` treats a bare string as a switch *key*
+                // and re-adds the `--` prefix itself, so passing
+                // "--enable-features=X" through it yields the nonsense switch
+                // "----enable-features=X". Split on the first `=` and hand
+                // chromiumoxide a (key, value) pair instead; it then merges the
+                // value into any default for the same switch (one
+                // `--enable-features=a,b` on the final command line) rather than
+                // emitting a duplicate that Chrome would ignore.
+                match flag.split_once('=') {
+                    Some((key, value)) => {
+                        let key = key.strip_prefix("--").unwrap_or(key);
+                        builder = builder.arg((key, value));
+                    }
+                    None => {
+                        let key = flag.strip_prefix("--").unwrap_or(flag);
+                        builder = builder.arg(key);
+                    }
+                }
             }
             let config = builder
                 .no_sandbox()
@@ -205,6 +222,109 @@ impl BrowserManager {
             Ok(result.into_value().unwrap_or(Value::Null))
         })
         .await
+    }
+
+    /// Discover WebMCP tools registered by the current page.
+    ///
+    /// Prefers the standard surface (`document.modelContext` /
+    /// `navigator.modelContext` -> `getTools()`), and falls back to Chromium's
+    /// testing interface (`navigator.modelContextTesting.listTools()`).
+    /// Returns `{ available, source, tools }` so callers can tell "no API" apart
+    /// from "API present, no tools".
+    pub async fn webmcp_list(&self) -> Result<Value> {
+        const SCRIPT: &str = r#"(async () => {
+  const mc = document.modelContext || navigator.modelContext;
+  const tst = navigator.modelContextTesting;
+  const norm = (t) => {
+    let schema = t.inputSchema;
+    if (typeof schema === 'string') { try { schema = JSON.parse(schema); } catch (_) {} }
+    return { name: t.name, description: t.description || '', inputSchema: schema ?? null };
+  };
+  try {
+    if (mc && typeof mc.getTools === 'function') {
+      const tools = await mc.getTools();
+      return JSON.stringify({ available: true, source: 'modelContext', tools: tools.map(norm) });
+    }
+    if (tst && typeof tst.listTools === 'function') {
+      const tools = await tst.listTools();
+      return JSON.stringify({ available: true, source: 'modelContextTesting', tools: Array.from(tools).map(norm) });
+    }
+    return JSON.stringify({ available: false, source: null, tools: [] });
+  } catch (e) {
+    return JSON.stringify({ available: true, error: String((e && e.message) || e), tools: [] });
+  }
+})()"#;
+        let raw = self.eval_js(SCRIPT).await?;
+        let text = raw
+            .as_str()
+            .ok_or_else(|| anyhow!("unexpected non-string result from WebMCP discovery script"))?;
+        serde_json::from_str(text).context("failed to parse WebMCP discovery result")
+    }
+
+    /// Execute a WebMCP tool registered by the current page.
+    ///
+    /// `arguments` is embedded as a JS object literal, so no argument content
+    /// is ever interpreted as code. The JSON-string form is kept as a fallback
+    /// because `navigator.modelContextTesting.executeTool` wants a string while
+    /// `document.modelContext.executeTool` wants an object.
+    pub async fn webmcp_call(&self, name: &str, arguments: &Value) -> Result<Value> {
+        let args_json = serde_json::to_string(arguments)?;
+        // Double-encode: JSON string literal of the JSON text.
+        let name_lit = serde_json::to_string(name)?;
+        let args_lit = serde_json::to_string(&args_json)?;
+
+        let script = format!(
+            r#"(async () => {{
+  const name = {name_lit};
+  const argsJson = {args_lit};
+  let args;
+  try {{
+    args = (argsJson && typeof argsJson === 'string') ? JSON.parse(argsJson) : {args_json:?};
+  }} catch (_) {{
+    args = {{}};
+  }}
+  const mc = document.modelContext || navigator.modelContext;
+  const tst = navigator.modelContextTesting;
+  const parse = (r) => {{
+    if (typeof r === 'string') {{ try {{ return JSON.parse(r); }} catch (_) {{ return r; }} }}
+    return r;
+  }};
+  try {{
+    let result;
+    if (mc && typeof mc.getTools === 'function' && typeof mc.executeTool === 'function') {{
+      const tools = await mc.getTools();
+      const tool = tools.find((t) => t.name === name);
+      if (!tool) return JSON.stringify({{ ok: false, error: 'no WebMCP tool named ' + name, available: tools.map((t) => t.name) }});
+      try {{
+        result = await mc.executeTool(tool, args);
+      }} catch (_) {{
+        try {{
+          result = await mc.executeTool(tool, argsJson);
+        }} catch (e2) {{
+          throw e2;
+        }}
+      }}
+    }} else if (tst && typeof tst.executeTool === 'function') {{
+      try {{
+        result = await tst.executeTool(name, args);
+      }} catch (_) {{
+        result = await tst.executeTool(name, argsJson);
+      }}
+    }} else {{
+      return JSON.stringify({{ ok: false, error: 'WebMCP is not available on this page/browser' }});
+    }}
+    // executeTool resolves to null when the call triggered a navigation.
+    return JSON.stringify({{ ok: true, result: result === undefined ? null : parse(result), navigated: result === null }});
+  }} catch (e) {{
+    return JSON.stringify({{ ok: false, error: String((e && e.message) || e) }});
+  }}
+}})()"#
+        );
+        let raw = self.eval_js(&script).await?;
+        let text = raw
+            .as_str()
+            .ok_or_else(|| anyhow!("unexpected non-string result from WebMCP call script"))?;
+        serde_json::from_str(text).context("failed to parse WebMCP call result")
     }
 
     /// Returns PNG bytes of the current page.
